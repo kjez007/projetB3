@@ -2,14 +2,15 @@
 pipeline {
     agent any
 
+    // Déclenche sur push dans 'main' (ou via webhook GitHub)
     triggers {
-        githubPush() // Déclenche sur push GitHub
+        githubPush() // Nécessite le plugin "GitHub Branch Source"
     }
 
     options {
         timeout(time: 20, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '10'))
-        skipDefaultCheckout(true)
+        skipDefaultCheckout(true) // On gère le checkout manuellement
     }
 
     environment {
@@ -22,9 +23,7 @@ pipeline {
     }
 
     stages {
-
-        // STAGE CLONE (comme tu l'as demandé)
-        stage('Clone') {
+        stage('Checkout') {
             when {
                 expression { env.BRANCH_NAME == 'main' }
             }
@@ -32,10 +31,9 @@ pipeline {
                 slackSend(
                     channel: env.SLACK_CHANNEL,
                     color: env.SLACK_COLOR_WARNING,
-                    message: "*Début du stage Clone* du dépôt `${env.GIT_REPO_URL}` sur branche `${env.BRANCH_NAME}`"
+                    message: "*Début du stage Checkout* sur branche `${env.BRANCH_NAME}`"
                 )
 
-                // CLONE RÉEL
                 checkout scmGit(
                     branches: [[name: 'main']],
                     userRemoteConfigs: [[
@@ -43,58 +41,57 @@ pipeline {
                         url: env.GIT_REPO_URL
                     ]]
                 )
-
-                // Preuve dans les logs
-                sh 'echo "Contenu du workspace après clone :"'
-                sh 'ls -la'
-                sh 'git log --oneline -5'
             }
             post {
                 success {
-                    slackSend(
-                        channel: env.SLACK_CHANNEL,
-                        color: env.SLACK_COLOR_GOOD,
-                        message: "*Clone* terminé avec succès ! Code récupéré."
-                    )
+                    slackSend channel: env.SLACK_CHANNEL, color: env.SLACK_COLOR_GOOD,
+                              message: "*Checkout* terminé avec succès !"
                 }
                 failure {
-                    slackSend(
-                        channel: env.SLACK_CHANNEL,
-                        color: env.SLACK_COLOR_DANGER,
-                        message: "*Clone* a échoué ! Vérifie l’URL ou les credentials."
-                    )
+                    slackSend channel: env.SLACK_CHANNEL, color: env.SLACK_COLOR_DANGER,
+                              message: "*Checkout* a échoué ! Vérifie les credentials Git."
                 }
             }
         }
 
         stage('Build') {
-            when { expression { env.BRANCH_NAME == 'main' } }
+            when {
+                expression { env.BRANCH_NAME == 'main' }
+            }
             steps {
                 slackSend channel: env.SLACK_CHANNEL, color: env.SLACK_COLOR_WARNING,
                           message: "*Début du stage Build*"
 
                 script {
                     if (sh(script: 'command -v mvn', returnStatus: true) != 0) {
-                        error "Maven non installé !"
+                        error "Maven n'est pas installé sur cet agent !"
                     }
                     sh 'mvn clean package -DskipTests'
                 }
             }
             post {
-                success { slackSend channel: env.SLACK_CHANNEL, color: env.SLACK_COLOR_GOOD, message: "*Build* OK" }
-                failure { slackSend channel: env.SLACK_CHANNEL, color: env.SLACK_COLOR_DANGER, message: "*Build* échoué" }
+                success {
+                    slackSend channel: env.SLACK_CHANNEL, color: env.SLACK_COLOR_GOOD,
+                              message: "*Build* terminé ! Artefact généré."
+                }
+                failure {
+                    slackSend channel: env.SLACK_CHANNEL, color: env.SLACK_COLOR_DANGER,
+                              message: "*Build* a échoué !"
+                }
             }
         }
 
         stage('Deploy') {
-            when { expression { env.BRANCH_NAME == 'main' } }
+            when {
+                expression { env.BRANCH_NAME == 'main' }
+            }
             steps {
                 slackSend channel: env.SLACK_CHANNEL, color: env.SLACK_COLOR_WARNING,
-                          message: "*Début du stage Deploy*"
+                          message: "*Début du stage Deploy* vers prod"
 
                 script {
                     if (sh(script: 'command -v docker', returnStatus: true) != 0) {
-                        error "Docker non installé !"
+                        error "Docker n'est pas installé !"
                     }
                     sh '''
                         docker build -t monapp:latest .
@@ -103,25 +100,31 @@ pipeline {
                 }
             }
             post {
-                success { slackSend channel: env.SLACK_CHANNEL, color: env.SLACK_COLOR_GOOD, message: "*Deploy* OK" }
-                failure { slackSend channel: env.SLACK_CHANNEL, color: env.SLACK_COLOR_DANGER, message: "*Deploy* échoué" }
+                success {
+                    slackSend channel: env.SLACK_CHANNEL, color: env.SLACK_COLOR_GOOD,
+                              message: "*Deploy* terminé ! App en prod."
+                }
+                failure {
+                    slackSend channel: env.SLACK_CHANNEL, color: env.SLACK_COLOR_DANGER,
+                              message: "*Deploy* a échoué !"
+                }
             }
         }
     }
 
     post {
         always {
-            def color = currentBuild.result == 'SUCCESS' ? env.SLACK_COLOR_GOOD : env.SLACK_COLOR_DANGER
-            slackSend(
-                channel: env.SLACK_CHANNEL,
-                color: color,
-                message: """
-*Pipeline terminé* `${env.JOB_NAME}` #${env.BUILD_NUMBER}
-Branche: `${env.BRANCH_NAME}`
-Résultat: *${currentBuild.result ?: 'UNKNOWN'}*
-Durée: ${currentBuild.durationString}
-                """.stripIndent()
-            )
+            script {
+                def color = currentBuild.result == 'SUCCESS' ? env.SLACK_COLOR_GOOD : env.SLACK_COLOR_DANGER
+                slackSend(
+                    channel: env.SLACK_CHANNEL,
+                    color: color,
+                    message: "*Pipeline terminé* `${env.JOB_NAME}` #${env.BUILD_NUMBER}\n" +
+                             "Branche: `${env.BRANCH_NAME}`\n" +
+                             "Résultat: *${currentBuild.result ?: 'UNKNOWN'}*\n" +
+                             "Durée: ${currentBuild.durationString}"
+                )
+            }
         }
     }
 }
