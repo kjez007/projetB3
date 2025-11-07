@@ -13,7 +13,7 @@ pipeline {
     }
 
     environment {
-        SLACK_CHANNEL = '#jenkins-ci'
+        SLACK_CHANNEL = '#jenkins'
         SLACK_COLOR_DANGER = '#D50200'
         SLACK_COLOR_WARNING = '#D5A100'
         SLACK_COLOR_GOOD = '#00B309'
